@@ -155,7 +155,9 @@ do*: func [
 				spec: reduce [
 					header
 					body
-					do-needs/no-user header
+					do-needs/with header #[
+						user: #(false)
+					]
 				]
 
 				also
@@ -203,28 +205,28 @@ make-module*: func [
 	spec [block!]
 	"As [spec-block body-block opt-mixins-object]"
 
-	/local body context mixins hidden words
+	/local header body context mixins hidden words
 ][
-	set [spec body mixins] spec
+	set [header body mixins] spec
 
-	if block? :spec [
+	if block? :header [
 		; Convert header block to standard header object:
 		;
-		spec: attempt [
-			construct/with :spec system/standard/header
+		header: attempt [
+			construct/with :header system/standard/header
 		]
 	]
 
 	; Validate the important fields of header:
 	;
 	assert/type [
-		spec object!
+		header object!
 		body block!
 		mixins [object! none!]
-		spec/name [any-word! none!]
-		spec/type [any-word! none!]
-		spec/version [tuple! none!]
-		spec/options [block! none!]
+		header/name [any-word! none!]
+		header/type [any-word! none!]
+		header/version [tuple! none!]
+		header/options [block! none!]
 	]
 
 	; Module is an object during its initialization:
@@ -232,13 +234,13 @@ make-module*: func [
 	context: make object! 7
 	; arbitrary starting size
 
-	either find spec/options 'extension [
+	either find header/options 'extension [
 		bind/new [
 			lib-base
-			; specific runtime values MUST BE FIRST
-
 			lib-file
 			lib-local
+			; specific runtime values MUST BE FIRST
+
 			words
 		] context
 	][
@@ -246,20 +248,20 @@ make-module*: func [
 		; local import library for the module
 	]
 
-	if spec/name [
-		spec/name: to word! spec/name
+	if header/name [
+		header/name: to word! header/name
 	]
 
-	unless spec/type [
-		spec/type: 'module
+	unless header/type [
+		header/type: 'module
 		; in case not set earlier
 	]
 
 	if find body 'export [
 		; Collect 'export keyword exports, removing the keywords
 		;
-		unless block? select spec 'exports [
-			repend spec [
+		unless block? select header 'exports [
+			repend header [
 				'exports make block! 10
 			]
 		]
@@ -274,13 +276,13 @@ make-module*: func [
 				opt [
 					set words any-word!
 					(
-						unless find spec/exports words: to word! words [
-							append spec/exports words
+						unless find header/exports words: to word! words [
+							append header/exports words
 						]
 					)
 					|
 					set words block!
-					(append spec/exports collect-words/ignore words spec/exports)
+					(append header/exports collect-words/ignore words header/exports)
 				]
 			]
 
@@ -288,8 +290,8 @@ make-module*: func [
 		]
 	]
 
-	if block? select spec 'exports [
-		bind/new spec/exports context
+	if block? select header 'exports [
+		bind/new header/exports context
 		; Add exported words at top of context (performance)
 	]
 
@@ -309,13 +311,13 @@ make-module*: func [
 				opt [
 					set words any-word!
 					(
-						unless find select spec 'exports words: to word! words [
+						unless find select header 'exports words: to word! words [
 							append hidden words
 						]
 					)
 					|
 					set words block!
-					(append hidden collect-words/ignore words select spec 'exports)
+					(append hidden collect-words/ignore words select header 'exports)
 				]
 			]
 
@@ -328,8 +330,7 @@ make-module*: func [
 	if block? hidden [
 		bind/new hidden context
 	]
-
-	either find spec/options 'isolate [
+	either find header/options 'isolate [
 		bind/new body context
 		; All words of the module body are module variables
 
@@ -338,7 +339,6 @@ make-module*: func [
 			; The module keeps its own variables (not shared with system)
 		]
 
-		; resolve context sys -- no longer done -Carl
 		resolve context lib
 	][
 		bind/only/set body context
@@ -347,9 +347,8 @@ make-module*: func [
 		bind body lib
 		; The module shares system exported variables:
 
-		; bind body sys -- no longer done -Carl
 		if object? mixins [
-			bind body mixins
+			bind body  mixins
 		]
 	]
 
@@ -366,12 +365,12 @@ make-module*: func [
 	]
 
 	context: to module! reduce [
-		spec context
+		header context
 	]
 
 	do body
 
-	;print ["Module created" spec/name spec/version]
+	; print ["Module created" header/name header/version]
 
 	context
 ]

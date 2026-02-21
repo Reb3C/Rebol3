@@ -281,7 +281,7 @@ load-header: function/with [
 		; decompress and checksum not done
 		; none saved to simplify later code
 
-		:keyword = 'rebol [
+		:keyword = 'Rebol [
 			; regular script, binary or script encoded compression supported
 
 			case [
@@ -332,7 +332,7 @@ load-header: function/with [
 
 		; assert/type [mark [binary!]] _
 
-		:keyword != 'rebol [
+		:keyword != 'Rebol [
 			; block-embedded script, only script compression, header/length ignored
 
 			set [body: remaining:] transcode/next start
@@ -492,7 +492,8 @@ load-boot-exts: function [
 			]
 
 			not any [
-				header/name find header/options 'private
+				header/name
+				find header/options 'private
 			][
 				header/options: append any [
 					header/options
@@ -755,6 +756,9 @@ do-needs: function [
 
 	/block
 	"Return all the imported modules in a block, instead"
+
+	/with
+	options [map!]
 ][
 	; NOTES:
 	; This is a low-level function and its use and return values reflect that.
@@ -765,21 +769,41 @@ do-needs: function [
 	; of all the modules imported, not any mixins - this is for when IMPORT
 	; is called with a Needs block.
 
-	case/all [
-		; If it's a header object:
+	options: either options [
+		union options compose #[
+			; needs (needs)
+			share #(true)
+			lib #(true)
+			user #(true)
+			block #(false)
+		]
+	][
+		; legacy ...
 		;
-		object? needs [
-			set/any 'needs select needs 'needs
-			; (protected)
+		options: compose #[
+			; needs (needs)
+			share (not no-share)
+			lib (not no-lib)
+			user (not no-user)
+			block (block)
 		]
+	]
 
-		none? needs [
-			return _
-		]
+	; If it's a header object:
+	;
+	if object? needs [
+		set/any 'needs select needs 'needs
+		; (protected)
+		
+	]
+
+	switch/default type? :needs [
+		#(unset!)  ; should never be unset
+		#(none!) [_]
 
 		; If simple version number check:
 		;
-		tuple? :needs [
+		#(tuple!) [
 			case [
 				needs > system/version [
 					cause-error 'syntax 'needs reduce [
@@ -798,105 +822,99 @@ do-needs: function [
 					]
 				]
 			]
-
-			return _
 		]
-
+	][
 		; If it's an inline value, put it in a block:
 		;
-		not block? :needs [
+		if not block? :needs [
 			needs: reduce [
 				:needs
 			]
 		]
 
-		empty? needs [
-			return _
-		]
-	]
+		if not empty? needs [
+			; Parse the needs dialect [source |version| |checksum-hash|]
+			;
+			needed-modules: make block! length? needs
 
-	; Parse the needs dialect [source |version| |checksum-hash|]
-	;
-	modules: make block! length? needs
+			name:
+			version:
+			hash: _
 
-	name:
-	version:
-	hash: _
+			if not parse needs [
+				mark:
 
-	unless parse needs [
-		mark:
-
-		opt [
-			opt 'core
-			set version tuple!
-			(do-needs version)
-		]
-
-		any [
-			mark:
-
-			set name [word! | file! | url!]
-			set version opt tuple!
-			set hash opt binary!
-
-			(
-				repend modules [
-					name version hash
+				opt [
+					opt 'core
+					set version tuple!
+					(do-needs version)
 				]
-			)
-		]
-	][
-		cause-error 'script 'invalid-arg mark
-	]
 
-	; Temporary object to collect exports of "mixins" (private modules).
-	; Don't bother if returning all the modules in a block, or if in user mode.
-	;
-	if all [
-		no-user
-		not block
-	][
-		mixins: make object! 0
-		; Minimal length since it may persist later
-	]
+				any [
+					mark:
 
-	; Import the modules:
-	;
-	modules: map-each [name version hash] modules [
-		; Import the module
+					set name [word! | file! | url!]
+					set version opt tuple!
+					set hash opt binary!
 
-		module: apply :import [
-			name
-			did version
-			version
-			did hash
-			hash
-			no-share
-			no-lib
-			no-user
-		]
+					(
+						repend needed-modules [
+							name version hash
+						]
+					)
+				]
+			][
+				cause-error 'script 'invalid-arg mark
+			]
 
-		; Collect any mixins into the object (if we are doing that)
-		;
-		if all [
-			mixins
-			mixin? module
-		][
-			resolve/extend/only mixins module select spec-of module 'exports
-		]
+			; Temporary object to collect exports of "mixins" (private modules).
+			; Don't bother if returning all the modules in a block, or if in user mode.
+			;
+			if all [  ; not any
+				not options/user
+				not options/block
+			][
+				imports: make object! 0
+				; Minimal length since it may persist later
+			]
 
-		module
-	]
+			; Import the modules:
+			;
+			modules: map-each [name version hash] needed-modules [
+				; Import the module
 
-	case [
-		block [
-			modules
-			; /block: return block of modules
-		]
+				module: import/with :name compose #[
+					needs (version)
+					hash (hash)
+					share (options/share)
+					lib (options/lib)
+					user (options/user)
+				]
 
-		not empty? mixins [
-			mixins
-			; else return mixins, if any
+				; Collect any mixins (imports) into the object (if we are doing that)
+				;
+				if all [
+					imports
+					mixin? module
+				][
+					resolve/extend/only imports module select spec-of module 'exports
+				]
+
+				module
+			]
+
+			case [
+				options/block [
+					modules
+					; /block: return block of modules
+				]
+
+				not empty? imports [
+					imports
+					; else return mixins, if any
+				]
+			]
+
 		]
 	]
 ]
@@ -933,6 +951,9 @@ load-module: function [
 
 	/delay
 	"Delay module init until later (ignored if source is module!)"
+
+	/with
+	options [map!]
 ][
 	; NOTES:
 	; This is a variation of LOAD that is used by IMPORT. Unlike LOAD, the module init
@@ -957,9 +978,37 @@ load-module: function [
 		; easiest way to protect against /local hacks
 	]
 
-	if import [
-		delay: _
-		; /import overrides /delay
+	options: either options [
+		union options compose #[
+			; source (source)
+			as _
+			name _
+			needs _
+			hash _
+			share #(true)
+			lib #(true)
+			force #(false)
+			delay #(false)
+		]
+	][
+		; legacy ...
+		;
+		compose #[
+			; source (source)
+			as (name)
+			name (name)
+			needs (needs)
+			hash (hash)
+			share (not no-share)
+			lib (not no-lib)
+			force (did import)
+			delay (did delay)
+		]
+	]
+
+	if options/force [
+		options/delay: no
+		; FORCE overrides DELAY
 	]
 
 	; Process the source, based on its type
@@ -969,7 +1018,7 @@ load-module: function [
 			; loading the preloaded
 
 			case/all [
-				as [
+				options/as [
 					cause-error 'script 'bad-refine /as
 					; no renaming
 				]
@@ -1050,7 +1099,7 @@ load-module: function [
 					; save for checksum before it's unset
 
 					case [
-						import [
+						options/force [
 							set [module-header: module-code:] load-ext-module extension
 						]
 
@@ -1060,8 +1109,8 @@ load-module: function [
 						]
 
 						not any [
-							delay
-							delay: did find module-header/options 'delay
+							options/delay
+							options/delay: did find module-header/options 'delay
 						][
 							set [module-header: module-code:] load-ext-module extension
 							; import now
@@ -1091,7 +1140,7 @@ load-module: function [
 				module-header/name
 				module? existing: select system/modules module-header/name
 			][
-				if as [
+				if options/as [
 					cause-error 'script 'bad-refine /as
 					; already imported
 				]
@@ -1108,8 +1157,8 @@ load-module: function [
 				; ; running: `do "rebol [type: module name: n]..."` multiple times
 
 				if all [
-					not version
-					not check
+					not options/version
+					not options/check
 					equal? module existing
 				][
 					return reduce [
@@ -1121,9 +1170,9 @@ load-module: function [
 
 		block? source [
 			if any [
-				version
-				check
-				as
+				options/version
+				options/check
+				options/as
 			][
 				cause-error 'script 'bad-refines _
 			]
@@ -1162,18 +1211,14 @@ load-module: function [
 			; this was MAP-EACH [...] SOURCE
 			;
 			return map-each [module needs hash name] module-content [
-				apply :load-module [
-					module
-					did needs
-					needs
-					did hash
-					hash
-					no-share
-					no-lib
-					import
-					did name
-					name
-					delay
+				load-module/with :module compose #[
+					as: (name)
+					needs: (needs)
+					hash: (hash)
+					share: (options/share)
+					lib: (options/lib)
+					force: (options/force)
+					delay: (options/delay)
 				]
 			]
 		]
@@ -1217,11 +1262,11 @@ load-module: function [
 					cause-error 'syntax module-header source
 				]
 
-				import _
+				options/force _
 				; /import overrides 'delay option
 
-				not delay [
-					delay: did find module-header/options 'delay
+				not options/delay [
+					options/delay: did find module-header/options 'delay
 				]
 			]
 
@@ -1234,31 +1279,35 @@ load-module: function [
 			]
 		]
 
-		no-share [
+		not options/share [
 			module-header/options: append any [
 				module-header/options
 				make block! 1
 			] 'isolate
 		]
-
-		name [
+ 
+		options/as [
 			; Unify module-header/name and /as name
 
-			module-header/name: name
+			name: module-header/name: options/as
 			; rename /as name
 		]
 
-		not name [
-			set/any 'name :module-header/name
+		not options/as [
+			name: any [
+				:module-header/name
+			]
 		]
 
 		all [
-			not no-lib
-			not word? :name
+			options/lib
+			not word? name
 			; requires name for full import
 		][
-			no-lib: yes
-			; Unnamed module can't be imported to lib, so /no-lib here
+			; Force Private Unnamed Module
+
+			options/lib: no
+			; Unnamed module can't be imported to lib (why?), so /no-lib here
 			; Still not /no-lib in IMPORT
 
 			unless find module-header/options 'private [
@@ -1278,7 +1327,7 @@ load-module: function [
 		; See if it's there already, or there is something more recent
 		;
 		all [
-			override?: not no-lib
+			override?: options/lib
 			; set to false later if existing module is used
 
 			existing: select system/modules name
@@ -1322,7 +1371,7 @@ load-module: function [
 					; here already
 
 					override?: not any [
-						delay
+						options/delay
 						module? module
 					]
 				]
@@ -1365,8 +1414,8 @@ load-module: function [
 						module-code
 					]
 
-					override?: not delay
-					; stays delayed if /delay
+					override?: not options/delay
+					; stays delayed if DELAY
 				]
 			]
 		]
@@ -1379,15 +1428,15 @@ load-module: function [
 		; Verify /check and /version
 
 		all [
-			check
-			hash !== module-hash
+			options/hash
+			options/hash !== module-hash
 		][
 			cause-error 'access 'invalid-check module
 		]
 
 		all [
-			version
-			needs > module-version
+			options/needs
+			options/needs > module-version
 		][
 			cause-error 'syntax 'needs reduce [
 				any [
@@ -1395,7 +1444,7 @@ load-module: function [
 					'version
 				]
 
-				needs
+				options/needs
 			]
 		]
 
@@ -1405,7 +1454,7 @@ load-module: function [
 			not override?
 			any [
 				module
-				delay
+				options/delay
 			]
 		][
 			return reduce [
@@ -1415,7 +1464,7 @@ load-module: function [
 
 		; If /delay, save the intermediate form
 		;
-		delay [
+		options/delay [
 			module: reduce [
 				module-header either object? extension [
 					extension
@@ -1428,11 +1477,11 @@ load-module: function [
 		; Else not /delay, make the module if needed
 		;
 		not module [
-			; not prebuilt or delayed, make a module
+			; not prebuilt or delayed, make a module!
 
 			case/all [
 				find module-header/options 'isolate [
-					no-share: yes
+					options/share: no
 					; in case of delay
 				]
 
@@ -1445,7 +1494,7 @@ load-module: function [
 					; in case of delayed rename
 
 					if all [
-						no-share
+						not options/share
 						not find module-header/options 'isolate
 					][
 						module-header/options: append any [
@@ -1468,7 +1517,9 @@ load-module: function [
 			module: reduce [
 				module-header
 				module-code
-				do-needs/no-user module-header
+				do-needs/with module-header #[
+					user: #(false)
+				]
 			]
 
 			module: catch/quit [
@@ -1477,7 +1528,7 @@ load-module: function [
 		]
 
 		all [
-			not no-lib
+			options/lib
 			override?
 		][
 			repend system/modules [
@@ -1632,26 +1683,47 @@ import: function [
 	"Don't export to the user context"
 
 	; See also: sys/make-module*, sys/load-module, sys/do-needs
+	/with
+	options [map!]
 ][
 	source: :module
-	options: system/options
+	sys-options: system/options
+
+	options: either options [
+		union options compose #[
+			; source (source)
+			needs _
+			hash _
+			share #(true)
+			lib #(true)
+			user #(true)
+		]
+	][
+		compose #[
+			; source (source)
+			needs (needs)
+			hash (hash)
+			share (not no-share)
+			lib (not no-lib)
+			user (not no-user)
+		]
+	]
 
 	if block? source [
 		; If it's a needs dialect block, call DO-NEEDS/block:
 		; Note: IMPORT block! returns a block of all the modules imported.
 
 		assert [
-			not version
-			not check
+			not options/version
+			not options/hash
 			; these can only apply to one module
 		]
 
-		return apply :do-needs [
-			source
-			no-share
-			no-lib
-			no-user
-			/block
+		return do-needs/with :source compose #[
+			share: (options/share)
+			lib: (options/lib)
+			user: (options/user)
+			block: #(true)
 		]
 	]
 
@@ -1660,16 +1732,13 @@ import: function [
 	]
 
 	; Try to load and check the module.
-	;
-	set [name: module:] apply :load-module [
-		source
-		version
-		needs
-		check
-		hash
-		no-share
-		no-lib
-		/import
+
+	set [name: module:] load-module/with source compose #[
+		needs: (options/needs)
+		hash: (options/hash)
+		share: (options/share)
+		lib: (options/lib)
+		force: #(true)
 	]
 
 	case [
@@ -1679,19 +1748,15 @@ import: function [
 		word? source [
 			; Module (as word!) is not loaded already, so let's try to find it.
 
-			file: append to file! source options/default-suffix
+			file: append to file! source sys-options/default-suffix
 
-			set [name: module:] apply :load-module [
-				options/modules/:file
-				version
-				needs
-				check
-				hash
-				no-share
-				no-lib
-				/import
-				/as
-				source
+			set [name: module:] load-module/with sys-options/modules/:file compose #[
+				needs: (options/needs)
+				hash: (options/hash)
+				share: (options/share)
+				lib: (options/lib)
+				force: #(true)
+				as: (source)
 			]
 
 			unless name [
@@ -1706,20 +1771,16 @@ import: function [
 					]
 				][
 					log/info 'REBOL [
-						"Importing extension:" options/ansi/reset file
+						"Importing extension:" sys-options/ansi/reset file
 					]
 
-					set [name: module:] apply :load-module [
-						file
-						version
-						needs
-						check
-						hash
-						no-share
-						no-lib
-						/import
-						/as
-						source
+					set [name: module:] load-module/with file compose #[
+						needs: (options/needs)
+						hash: (options/hash)
+						share: (options/share)
+						lib: (options/lib)
+						force: #(true)
+						as: (source)
 					]
 				][
 					module: _
@@ -1759,7 +1820,7 @@ import: function [
 		; If it's a private module (mixin), we must add *all* of its exports to user.
 		;
 		any [
-			no-lib
+			not options/lib
 
 			find select header 'options 'private
 			; /no-lib causes private
@@ -1768,7 +1829,7 @@ import: function [
 		]
 
 		; Unless /no-lib its exports are in lib already, so just import what we need.
-		not no-lib [
+		options/lib [
 			resolve/only system/contexts/user lib exports
 		]
 	]
