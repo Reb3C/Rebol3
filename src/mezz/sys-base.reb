@@ -51,7 +51,7 @@ do*: func [
 	mark [word!]
 	"Variable updated with new block position"
 
-	/local body file spec current-path header saved-script is-module
+	/local body file spec current-path header saved-script
 ][
 	; This code is only called for urls, files, and strings.
 	; DO of functions, blocks, paths, and other do-able types is done in the
@@ -66,24 +66,41 @@ do*: func [
 
 	; Load the data, first so it will error before change-dir
 
-	either string? value [
-		body: load/all/as value 'unbound
-		; does not evaluate Rebol header
-	][
-		body: load/header/as value 'unbound
-		; unbound so DO-NEEDS runs before INTERN
+	switch/all type? value [
+		#(string!) [
+			body: load/all/as value 'unbound
+			; does not evaluate Rebol header
 
-		header: first+ body
-		; Get the header and advance 'data to the code position
-		; object or none
+			type: _
+		]
 
-		is-module: 'module = select header 'type
-		; data is a block! here, with the header object in the first position back
+		; #(file!)
+		; #(url!) [
+		; 	placeholder
+		; ]
+
+		#(file!)
+		#(url!)
+		#(binary!) [
+			body: load/header/as value 'unbound
+			; unbound so DO-NEEDS runs before INTERN
+
+			header: first+ body
+			; Get the header and advance 'data to the code position
+			; object or none
+
+			type: select header 'type
+			; data is a block! here, with the header object in the first position back
+
+			assert/type [
+				type [word! path! none!]
+			]
+		]
 	]
 
 	either all [
 		string? value
-		not is-module
+		'module <> type
 	][
 		; Return result without script overhead
 
@@ -137,39 +154,70 @@ do*: func [
 			args: :arg
 		]
 
-		; Print out the script info
-		;
-		log/info 'REBOL [
-			pick ["Module:" "Script:"] is-module
-			mold select header 'title
-			"Version:" select header 'version
-			"Date:"	   select header 'date
-		]
-
 		set/any 'value try [
 			; Eval the block or make the module, returned
 
-			either is-module [
-				; Import the module and set the var
+			switch/default type [
+				_ [
+					; Print out the script info
+					;
+					log/info 'REBOL [
+						"Script:"  mold select header 'title
+						"Version:" select header 'version
+						"Date:"	   select header 'date
+					]
 
-				spec: reduce [
-					header
-					body
-					do-needs/with header #[
-						export: #(false)
+					do-needs header
+					; Load the script requirements
+
+					intern body
+					; Bind the user script
+
+					catch/quit either mark [
+						[do/next body mark]
+					][
+						body
 					]
 				]
 
-				also
-				import (
-					catch/quit [
-						make module! spec
+				module [
+					; Print out the module info
+					;
+					log/info 'REBOL [
+						"Module:"  mold select header 'title
+						"Name:"    any [select header 'name "(unnamed)"]
+						"Version:" select header 'version
+						"Date:"	   select header 'date
 					]
-				)
-				if mark [
-					set mark tail body
+
+					; Import the module and set the var
+
+					spec: reduce [
+						header
+						body
+						do-needs/with header #[
+							export: #(false)
+						]
+					]
+
+					also
+					import (
+						catch/quit [
+							make module! spec
+						]
+					)
+					if mark [
+						set mark tail body
+					]
 				]
 			][
+				log/info 'REBOL [
+					"Data:"    mold select header 'title
+					"Type:"    mold type
+					"Version:" select header 'version
+					"Date:"	   select header 'date
+				]
+
 				do-needs header
 				; Load the script requirements
 
@@ -205,7 +253,7 @@ make-module*: func [
 	spec [block!]
 	"As [spec-block body-block opt-imports-object]"
 
-	/local header body context imports hidden words
+	/local header body module imports hidden words
 ][
 	set [header body imports] spec
 
@@ -231,7 +279,7 @@ make-module*: func [
 
 	; Module is an object during its initialization:
 	;
-	context: make object! 7
+	module: make object! 7
 	; arbitrary starting size
 
 	either find header/options 'extension [
@@ -242,9 +290,9 @@ make-module*: func [
 			; specific runtime values MUST BE FIRST
 
 			words
-		] context
+		] module
 	][
-		append context 'lib-local
+		append module 'lib-local
 		; local import library for the module
 	]
 
@@ -293,7 +341,7 @@ make-module*: func [
 	; Add exported words at top of context (performance)
 	;
 	if block? select header 'exports [
-		bind/new header/exports context
+		bind/new header/exports module
 	]
 
 	; Collect 'hidden keyword words, removing the keywords. Ignore exports.
@@ -329,21 +377,23 @@ make-module*: func [
 	; Add hidden words next to the context (performance)
 	;
 	if block? hidden [
-		bind/new hidden context
+		bind/new hidden module
 	]
 
+	; Resolve module binding
+	;
 	either find header/options 'isolate [
-		bind/new body context
+		bind/new body module
 		; All words of the module body are module variables
 
 		if object? imports [
-			resolve context imports
+			resolve module imports
 			; The module keeps its own variables (not shared with system)
 		]
 
-		resolve context lib
+		resolve module lib
 	][
-		bind/only/set body context
+		bind/only/set body module
 		; Only top level defined words are module variables.
 
 		bind body lib
@@ -354,9 +404,9 @@ make-module*: func [
 		]
 	]
 
-	bind body context
+	bind body module
 
-	context/lib-local: any [
+	module/lib-local: any [
 		; always set, always overrides
 		imports
 		make object! 0
@@ -366,15 +416,15 @@ make-module*: func [
 		protect/hide/words hidden
 	]
 
-	context: to module! reduce [
-		header context
+	module: to module! reduce [
+		header module
 	]
 
 	do body
 
 	; print ["Module created" header/name header/version]
 
-	context
+	module
 ]
 
 ; MOVE some of these to SYSTEM?
