@@ -156,7 +156,7 @@ do*: func [
 					header
 					body
 					do-needs/with header #[
-						user: #(false)
+						export: #(false)
 					]
 				]
 
@@ -203,11 +203,11 @@ make-module*: func [
 	"SYS: Called by system on MAKE of MODULE! datatype."
 
 	spec [block!]
-	"As [spec-block body-block opt-mixins-object]"
+	"As [spec-block body-block opt-imports-object]"
 
-	/local header body context mixins hidden words
+	/local header body context imports hidden words
 ][
-	set [header body mixins] spec
+	set [header body imports] spec
 
 	if block? :header [
 		; Convert header block to standard header object:
@@ -222,7 +222,7 @@ make-module*: func [
 	assert/type [
 		header object!
 		body block!
-		mixins [object! none!]
+		imports [object! none!]
 		header/name [any-word! none!]
 		header/type [any-word! none!]
 		header/version [tuple! none!]
@@ -257,9 +257,9 @@ make-module*: func [
 		; in case not set earlier
 	]
 
+	; Collect 'export keyword exports, removing the keywords
+	;
 	if find body 'export [
-		; Collect 'export keyword exports, removing the keywords
-		;
 		unless block? select header 'exports [
 			repend header [
 				'exports make block! 10
@@ -290,15 +290,16 @@ make-module*: func [
 		]
 	]
 
+	; Add exported words at top of context (performance)
+	;
 	if block? select header 'exports [
 		bind/new header/exports context
-		; Add exported words at top of context (performance)
 	]
 
 	; Collect 'hidden keyword words, removing the keywords. Ignore exports.
 	;
 	hidden: _
-
+	;
 	if find body 'hidden [
 		hidden: make block! 10
 
@@ -330,12 +331,13 @@ make-module*: func [
 	if block? hidden [
 		bind/new hidden context
 	]
+
 	either find header/options 'isolate [
 		bind/new body context
 		; All words of the module body are module variables
 
-		if object? mixins [
-			resolve context mixins
+		if object? imports [
+			resolve context imports
 			; The module keeps its own variables (not shared with system)
 		]
 
@@ -347,8 +349,8 @@ make-module*: func [
 		bind body lib
 		; The module shares system exported variables:
 
-		if object? mixins [
-			bind body  mixins
+		if object? imports [
+			bind body  imports
 		]
 	]
 
@@ -356,7 +358,7 @@ make-module*: func [
 
 	context/lib-local: any [
 		; always set, always overrides
-		mixins
+		imports
 		make object! 0
 	]
 

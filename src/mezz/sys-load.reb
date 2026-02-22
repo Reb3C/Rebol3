@@ -596,7 +596,7 @@ load: function [
 	type [word! none!]
 	"E.g. text, markup, jpeg, unbound, etc."
 ][
-	; WATCH OUT: for ALL and NEXT words! They are local.
+	; WATCH OUT: for ALL word! It is local.
 
 	; NOTES:
 	; Note that code/data can be embedded in other datatypes, including
@@ -670,7 +670,7 @@ load: function [
 			block? body
 
 			not find [0 extension unbound] any [type 0]
-			; due to make-boot issue with #[none]
+			; due to make-boot issue with #(none)
 		][
 			unless type [
 				return body
@@ -769,24 +769,35 @@ do-needs: function [
 	; of all the modules imported, not any mixins - this is for when IMPORT
 	; is called with a Needs block.
 
-	options: either options [
-		union options compose #[
-			; needs (needs)
+	options: compose either options [
+		union options #[
 			share #(true)
 			lib #(true)
-			user #(true)
+			export #(true)
 			block #(false)
 		]
 	][
 		; legacy ...
 		;
-		options: compose #[
-			; needs (needs)
+		#[
 			share (not no-share)
 			lib (not no-lib)
-			user (not no-user)
+			export (not no-user)
 			block (block)
 		]
+	]
+
+	; options/needs: needs
+	; ; for debugging
+
+	assert/type [
+		local none!
+		; easiest way to protect against /local hacks
+
+		options/share [logic! none!]
+		options/lib [logic! none!]
+		options/export [logic! none!]
+		options/block [logic! none!]
 	]
 
 	; If it's a header object:
@@ -870,9 +881,9 @@ do-needs: function [
 			; Temporary object to collect exports of "mixins" (private modules).
 			; Don't bother if returning all the modules in a block, or if in user mode.
 			;
-			if all [  ; not any
-				not options/user
-				not options/block
+			if not any [
+				options/export
+				options/block
 			][
 				imports: make object! 0
 				; Minimal length since it may persist later
@@ -883,12 +894,12 @@ do-needs: function [
 			modules: map-each [name version hash] needed-modules [
 				; Import the module
 
-				module: import/with :name compose #[
+				module: import/with :name #[
 					needs (version)
 					hash (hash)
 					share (options/share)
 					lib (options/lib)
-					user (options/user)
+					export (options/export)
 				]
 
 				; Collect any mixins (imports) into the object (if we are doing that)
@@ -914,7 +925,6 @@ do-needs: function [
 					; else return mixins, if any
 				]
 			]
-
 		]
 	]
 ]
@@ -973,16 +983,9 @@ load-module: function [
 	; Returns none if source is file/url and read or load-extension fails.
 	; sys/log/info 'REBOL ["load-module:" source]
 
-	assert/type [
-		local none!
-		; easiest way to protect against /local hacks
-	]
-
-	options: either options [
-		union options compose #[
-			; source (source)
+	options: compose either options [
+		union options #[
 			as _
-			name _
 			needs _
 			hash _
 			share #(true)
@@ -993,10 +996,8 @@ load-module: function [
 	][
 		; legacy ...
 		;
-		compose #[
-			; source (source)
+		#[
 			as (name)
-			name (name)
 			needs (needs)
 			hash (hash)
 			share (not no-share)
@@ -1006,6 +1007,22 @@ load-module: function [
 		]
 	]
 
+	; options/source: source
+	; ; for debugging
+
+	assert/type [
+		local none!
+		; easiest way to protect against /local hacks
+
+		options/as [word! none!]
+		options/needs [tuple! none!]
+		options/hash [binary! none!]
+		options/share [logic!]
+		options/lib [logic!]
+		options/force [logic!]
+		options/delay [logic!]
+	]
+
 	if options/force [
 		options/delay: no
 		; FORCE overrides DELAY
@@ -1013,8 +1030,8 @@ load-module: function [
 
 	; Process the source, based on its type
 	;
-	case [
-		word? source [
+	switch type? source [
+		#(word!) [
 			; loading the preloaded
 
 			case/all [
@@ -1033,10 +1050,10 @@ load-module: function [
 				all [
 					; If no further processing is needed, shortcut return
 
-					not version
-					not check
+					not options/needs
+					not options/hash
 					any [
-						delay
+						options/delay
 						module? :module
 					]
 				][
@@ -1049,18 +1066,16 @@ load-module: function [
 			]
 		]
 
-		binary? source [
+		#(binary!) [
 			module-content: source
 		]
 
-		string? source [
+		#(string!) [
 			module-content: to binary! source
 		]
 
-		any [
-			file? source
-			url? source
-		][
+		#(file!)
+		#(url!) [
 			if file? source [
 				source: any [
 					to-real-file source
@@ -1084,7 +1099,7 @@ load-module: function [
 					]
 				]
 
-				detected-type = 'extension [
+				'extension = detected-type [
 					; special processing for extensions
 					; load-extension also fails for url!
 
@@ -1129,7 +1144,7 @@ load-module: function [
 			]
 		]
 
-		module? source [
+		#(module!) [
 			module: source
 
 			module-header: spec-of module
@@ -1168,7 +1183,7 @@ load-module: function [
 			]
 		]
 
-		block? source [
+		#(block!) [
 			if any [
 				options/version
 				options/check
@@ -1211,7 +1226,7 @@ load-module: function [
 			; this was MAP-EACH [...] SOURCE
 			;
 			return map-each [module needs hash name] module-content [
-				load-module/with :module compose #[
+				load-module/with :module #[
 					as: (name)
 					needs: (needs)
 					hash: (hash)
@@ -1518,7 +1533,7 @@ load-module: function [
 				module-header
 				module-code
 				do-needs/with module-header #[
-					user: #(false)
+					export: #(false)
 				]
 			]
 
@@ -1550,7 +1565,6 @@ load-module: function [
 
 	reduce [
 		name
-
 		if module? module [
 			module
 		]
@@ -1689,24 +1703,38 @@ import: function [
 	source: :module
 	sys-options: system/options
 
-	options: either options [
-		union options compose #[
-			; source (source)
+	options: compose either options [
+		union options #[
 			needs _
 			hash _
 			share #(true)
 			lib #(true)
-			user #(true)
+			export #(true)
 		]
 	][
-		compose #[
-			; source (source)
+		; legacy ...
+		;
+		#[
 			needs (needs)
 			hash (hash)
 			share (not no-share)
 			lib (not no-lib)
-			user (not no-user)
+			export (not no-user)
 		]
+	]
+
+	; options/source: source
+	; ; for debugging
+
+	assert/type [
+		local none!
+		; easiest way to protect against /local hacks
+
+		options/needs [tuple! none!]
+		options/hash [binary! none!]
+		options/share [logic!]
+		options/lib [logic!]
+		options/export [logic!]
 	]
 
 	if block? source [
@@ -1719,10 +1747,10 @@ import: function [
 			; these can only apply to one module
 		]
 
-		return do-needs/with :source compose #[
+		return do-needs/with :source #[
 			share: (options/share)
 			lib: (options/lib)
-			user: (options/user)
+			export: (options/export)
 			block: #(true)
 		]
 	]
@@ -1731,9 +1759,13 @@ import: function [
 		source: to word! source
 	]
 
+	;** test: import block
+	;** test: import block with version and/or hash
+	;** test: import with different word-types
+
 	; Try to load and check the module.
 
-	set [name: module:] load-module/with source compose #[
+	set [name: module:] load-module/with source #[
 		needs: (options/needs)
 		hash: (options/hash)
 		share: (options/share)
@@ -1750,7 +1782,7 @@ import: function [
 
 			file: append to file! source sys-options/default-suffix
 
-			set [name: module:] load-module/with sys-options/modules/:file compose #[
+			set [name: module:] load-module/with sys-options/modules/:file #[
 				needs: (options/needs)
 				hash: (options/hash)
 				share: (options/share)
@@ -1774,7 +1806,7 @@ import: function [
 						"Importing extension:" sys-options/ansi/reset file
 					]
 
-					set [name: module:] load-module/with file compose #[
+					set [name: module:] load-module/with file #[
 						needs: (options/needs)
 						hash: (options/hash)
 						share: (options/share)
@@ -1794,12 +1826,12 @@ import: function [
 			url? source
 		][
 			cause-error 'access 'cannot-open reduce [
-				source "not found or not valid"
+				uppercase to tag! source "not found or not valid"
 			]
 		]
 	]
 
-	unless module [
+	if not module [
 		cause-error 'access 'cannot-open reduce [
 			source "module not found"
 		]
@@ -1807,14 +1839,14 @@ import: function [
 
 	; Do any imports to the user context that are necessary.
 	; The lib imports were handled earlier by LOAD-MODULE.
-
+	;
 	case [
-		; Do nothing if /no-user or no exports.
+		; Do nothing if no exports.
 		;
-		no-user _
-
+		not options/export _
+		;
 		not block? exports: select header: spec-of module 'exports _
-
+		;
 		empty? exports _
 
 		; If it's a private module (mixin), we must add *all* of its exports to user.
@@ -1828,14 +1860,14 @@ import: function [
 			resolve/extend/only system/contexts/user module exports
 		]
 
-		; Unless /no-lib its exports are in lib already, so just import what we need.
+		; If OPTIONS/LIB, its exports are in lib already, so just import what we need.
+		;
 		options/lib [
 			resolve/only system/contexts/user lib exports
 		]
 	]
 
 	protect 'module/lib-base
-
 	protect/hide 'module/lib-boot
 
 	module
